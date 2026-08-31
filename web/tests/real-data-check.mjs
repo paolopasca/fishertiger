@@ -28,7 +28,7 @@ const RULES = {
     increment: 1,
     reserve: 1,
     nomination: "call",
-    roleBudgetPercentages: { P: 10, D: 26, C: 30, A: 34 },
+    roleBudgetPercentages: { P: 7, D: 19, C: 35, A: 39 },
     roleBudgetFlexibilityPercent: 5,
   },
 };

@@ -274,7 +274,10 @@ const roleFrontier = (players, count, budget, costFor, valueFor, role, ownedValu
       0,
     );
     for (let selected = count; selected >= 1; selected--) {
-      const value = raw * positionWeight(role, ownedAbove + selected - 1);
+      // I pesi posizionali restano calcolati (config/pesi_xi.json, tools/pesi_xi.py) ma
+      // NON entrano piu' nel valore: in backtest su 240 aste costano 77.8 +- 26.1 punti
+      // stagione (t=-2.98). Il mercato prezza gia' il fatto che la panchina rende meno.
+      const value = raw;
       const current = dp[selected];
       const previous = dp[selected - 1];
       for (let credits = budget; credits >= cost; credits--) {
@@ -387,9 +390,7 @@ export const evaluateOverview = (data = {}) => {
   const costFor = (item) =>
     estimatedCost(item, market, scarcity, valuation.normalizedFvm);
   const budgetPlan = roleBudgetPlan(records, ownerIndex, needs, rules);
-  const levels = replacementLevels([...pool, ...records.map((record) => record.player)], rules);
-  const valueFor = (player) =>
-    valueAboveReplacement(player, finite(levels[player?.ruolo]), rules.horizons?.currentLeague?.matchdayIndices);
+  const valueFor = (player) => contribution(player, rules);
 
   const plans = Object.fromEntries(
     roles.map((role) => {
@@ -555,9 +556,13 @@ export const evaluateAuction = (data = {}) => {
   // zero, schiera il sostituto. Senza questa correzione un giocatore da fantavoto altis-
   // simo che salta partite finisce dietro a un titolare mediocre, e il modello sbaglia
   // esattamente sui big.
-  const levels = replacementLevels([player, ...pool, ...records.map((record) => record.player)], rules);
-  const valueFor = (item) =>
-    valueAboveReplacement(item, finite(levels[item?.ruolo]), rules.horizons?.currentLeague?.matchdayIndices);
+  // Contributo additivo, non piu' il valore sopra rimpiazzo: quest'ultimo perde contro
+  // il mercato di 257 +- 126 punti stagione (t=-2.03). Il ragionamento regge (quando un
+  // giocatore salta la giornata schieri il sostituto, non prendi zero) ma il prezzo di
+  // mercato lo incorpora gia', e applicarlo una seconda volta sposta le scelte verso
+  // profili sbagliati: a parita' di prezzo chi ha fantamedia alta gioca MENO
+  // (coefficiente -0.209, t=-6.0 su 1564 osservazioni).
+  const valueFor = (item) => contribution(item, rules);
   const perTeamShare = Math.max(1, Number(rules.participants) || 1);
   // Posizione di ogni giocatore dentro il proprio ruolo nel pool residuo: serve sia al
   // prezzo del modello sia al denominatore, e va calcolata una volta sola.
@@ -619,7 +624,24 @@ export const evaluateAuction = (data = {}) => {
     );
   };
 
-  const costFor = (item) => modelPrice(item);
+  const marketBase = (item) =>
+    estimatedCost(item, market, scarcity, valuation.normalizedFvm);
+  const marketNormalisation = (() => {
+    let expected = 0;
+    for (const role of roles) {
+      const demand = scarcity[role]?.demand || 0;
+      if (!demand) continue;
+      expected += pool
+        .filter((item) => item.ruolo === role)
+        .map(marketBase)
+        .sort((a, b) => b - a)
+        .slice(0, demand)
+        .reduce((sum, value) => sum + value, 0);
+    }
+    return expected > 0 ? Math.max(0.2, Math.min(5, leagueCreditsLeft / expected)) : 1;
+  })();
+  const costFor = (item) =>
+    Math.max(rules.auction.minPrice, rounded(marketBase(item) * marketNormalisation));
   const candidateCost = estimatedCost(
     player,
     market,
@@ -735,7 +757,7 @@ export const evaluateAuction = (data = {}) => {
   // Le frontiere sono pesate per posizione: il termine del candidato deve esserlo
   // altrettanto, altrimenti si confronta un valore grezzo con una somma pesata e ogni
   // riserva sembra indispensabile.
-  const candidateTotalValue = candidateWeight * candidateValue + defenseMarginalValue;
+  const candidateTotalValue = candidateValue + defenseMarginalValue;
   let feasibilityMax = 0;
   let indifferencePrice = 0;
   let stillIndifferent = true;
@@ -777,7 +799,15 @@ export const evaluateAuction = (data = {}) => {
 
   // Disponibilita' a pagare: il prezzo equo del modello, alzato dal prezzo di indifferenza
   // quando il giocatore e' centrale nel piano rosa. Poi i vincoli duri.
-  const willingness = Math.max(exchangeCap, indifferencePrice);
+  // Il tetto resta ancorato al mercato entro il moltiplicatore di qualita': staccarsene
+  // peggiora in modo monotono (lambda 0 -> -101 punti, lambda 0.15 -> -482). Prezzo di
+  // indifferenza e prezzo equo restano come SOFFITTI, cioe' possono solo abbassare.
+  // Tetto = prezzo di mercato per il moltiplicatore di qualita', come nell'originale.
+  // Il prezzo di indifferenza NON vincola: il suo termine di confronto e' la rosa ottima
+  // ai prezzi stimati, irraggiungibile con nove avversari che competono, quindi e'
+  // distorto verso il basso e direbbe di non comprare nessuno. Resta nel riepilogo come
+  // diagnostica, insieme al prezzo equo del modello.
+  const willingness = valueCap > 0 ? valueCap : 0;
   const maxBid =
     feasibilityMax < rules.auction.minPrice
       ? 0

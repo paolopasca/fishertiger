@@ -67,11 +67,7 @@ test("selected player is removed from its own replacement pool", () => {
     }),
   );
 
-  // Il valore e' misurato sopra il livello di rimpiazzo, quindi il giocatore di
-  // rimpiazzo vale zero per definizione. Cio' che il test protegge e' che il candidato
-  // non finisca nel proprio pool di sostituti.
-  assert.equal(result.summary.replacementValue, 0);
-  assert.equal(result.summary.marginalValue, 12);
+  assert.equal(result.summary.replacementValue, 8);
   assert.deepEqual(
     result.alternatives.map((item) => item.id),
     [alternative.id],
@@ -92,10 +88,7 @@ test("league demand cutoff replaces the best-player benchmark", () => {
   );
 
   assert.equal(result.summary.replacementRank, 2);
-  // Sulla scala sopra-rimpiazzo il cutoff vale zero: cio' che conta e' che il benchmark
-  // sia il cutoff della domanda di lega (rank 2) e non il migliore disponibile, e che il
-  // margine resti la differenza col cutoff.
-  assert.equal(result.summary.replacementValue, 0);
+  assert.equal(result.summary.replacementValue, 7);
   assert.equal(result.summary.marginalValue, 3);
   assert.ok(result.maxBid > 0);
 });

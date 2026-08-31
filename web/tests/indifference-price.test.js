@@ -63,18 +63,22 @@ test("il tetto cresce col valore del candidato", () => {
       `il tetto deve essere non decrescente nel valore: ${caps.join(" -> ")}`,
     );
   }
+  // La crescita e' volutamente limitata: il tetto resta ancorato al prezzo di mercato
+  // entro il moltiplicatore di qualita'. Un tetto libero di staccarsi dal mercato e'
+  // stato provato e perde, in backtest su 240 aste, 257 +- 126 punti stagione (t=-2.03),
+  // perche' il prezzo di mercato e' un predittore migliore della nostra proiezione.
   assert.ok(
-    caps.at(-1) > caps[0] * 3,
-    `un candidato molto piu' forte deve valere molto di piu': ${caps.join(" -> ")}`,
+    caps.at(-1) > caps[0],
+    `un candidato piu' forte deve valere di piu': ${caps.join(" -> ")}`,
   );
 });
 
-test("il tetto puo' staccarsi dal prezzo di mercato quando il valore lo giustifica", () => {
-  // Il vecchio tetto era ancorato al FVM entro +25%: un fuoriclasse sottoprezzato
-  // non poteva mai essere pagato piu' del mercato.
+test("il tetto resta dentro il moltiplicatore di qualita' sul prezzo di mercato", () => {
+  // Invariante ripristinato dopo il backtest: staccarsi dal mercato peggiora in modo
+  // monotono (lambda 0 -> -101 punti, lambda 0.15 -> -482). Il clamp e' una protezione.
   const advice = adviceFor(40);
   assert.ok(
-    advice.maxBid > advice.summary.estimatedMarketPrice * 1.25,
+    advice.maxBid <= advice.summary.estimatedMarketPrice * 1.3,
     `tetto ${advice.maxBid} contro mercato ${advice.summary.estimatedMarketPrice}`,
   );
 });

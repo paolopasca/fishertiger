@@ -55,6 +55,7 @@ FORMATIONS = [(3, 4, 3), (3, 5, 2), (4, 3, 3), (4, 4, 2), (4, 5, 1), (5, 3, 2), 
 DEFENSE_TIERS = [(6.0, 1), (6.5, 3), (7.0, 6)]
 VOTE_SD = 0.8
 MATCHDAYS = 38
+REPETITIONS = 1
 WEIGHTS = json.loads(Path("config/pesi_xi.json").read_text(encoding="utf-8"))
 
 
@@ -71,7 +72,7 @@ def previous(season: str, count: int = 3) -> list[str]:
 def load(season: str) -> pd.DataFrame:
     listone = pd.read_excel(f"data/raw/listone_{season}.xlsx", sheet_name="Tutti", header=1)
     stats = pd.read_excel(f"data/raw/statistiche_{season}.xlsx", sheet_name="Tutti", header=1)
-    frame = listone[["Id", "R", "Nome", "Qt.I"]].merge(
+    frame = listone[["Id", "R", "Nome", "Squadra", "Qt.I"]].merge(
         stats[["Id", "Pv", "Mv", "Fm"]], on="Id", how="left")
     frame[["Pv", "Mv", "Fm"]] = frame[["Pv", "Mv", "Fm"]].fillna(0.0)
     frame["p_gioca"] = (frame.Pv / MATCHDAYS).clip(0, 1)
@@ -110,6 +111,30 @@ def load(season: str) -> pd.DataFrame:
         mask = (frame.R == role) & frame.fm_atteso.isna()
         known = frame.loc[(frame.R == role) & frame.fm_atteso.notna(), "fm_atteso"]
         frame.loc[mask, "fm_atteso"] = known.quantile(0.10) if len(known) else 5.0
+
+    # Segnali che aggiungono informazione oltre il prezzo di mercato.
+    prev_seasons = previous(season)
+    if prev_seasons:
+        p1 = pd.read_excel(f"data/raw/statistiche_{prev_seasons[0]}.xlsx",
+                           sheet_name="Tutti", header=1).set_index("Id")
+        frame["pv_prec"] = p1.Pv.reindex(frame.Id).to_numpy()
+        frame["fm_prec"] = p1.Fm.reindex(frame.Id).to_numpy()
+        frame["punti_prec"] = (p1.Fm * p1.Pv).reindex(frame.Id).to_numpy()
+        frame["gol90_prec"] = (p1.Gf / p1.Pv.replace(0, np.nan)).reindex(frame.Id).to_numpy()
+        squadra_prec = p1.Squadra.reindex(frame.Id)
+        frame["cambio_squadra"] = (
+            frame.set_index("Id").Squadra.ne(squadra_prec).astype(float).to_numpy()
+        )
+        presence = []
+        for past_season in prev_seasons:
+            past = pd.read_excel(f"data/raw/statistiche_{past_season}.xlsx",
+                                 sheet_name="Tutti", header=1).set_index("Id")
+            presence.append(past.Pv.reindex(frame.Id).notna().astype(float).to_numpy())
+        frame["esperienza"] = np.sum(presence, axis=0)
+    else:
+        for column in ("pv_prec", "fm_prec", "punti_prec", "gol90_prec",
+                       "cambio_squadra", "esperienza"):
+            frame[column] = np.nan
 
     # Valore sopra il rimpiazzo: quanto rende in piu' di chi giocherebbe al posto suo.
     # Sommare i punti attesi direbbe che nelle giornate saltate la squadra prende zero.
@@ -208,6 +233,69 @@ def insurance_value(profile: dict[str, list[float]], role: str, availability: fl
     return max(0.0, gain) * MATCHDAYS * team_score
 
 
+ORIGINAL_SPLIT = {"P": 0.07, "D": 0.18, "C": 0.25, "A": 0.50}
+
+# Segnali che, misurati su 11 stagioni, aggiungono informazione OLTRE il prezzo di
+# mercato (vedi tools/correlazioni.py). I due segni negativi sono il cuore della cosa:
+# a parita' di prezzo, chi aveva fantamedia alta e faceva gol gioca meno. Il mercato
+# paga la qualita' a partita e sottopaga l'affidabilita'.
+SIGNALS = ["pv_prec", "punti_prec", "cambio_squadra", "esperienza", "fm_prec", "gol90_prec"]
+
+
+def fitted_price(frame: pd.DataFrame, history: list[pd.DataFrame], kappa: float) -> pd.Series:
+    """Prezzo di mercato corretto da un modello addestrato SOLO sulle stagioni passate.
+
+    Si stima rango(punti) ~ rango(prezzo) + segnali, si guarda di quanto il modello
+    dissente dal mercato, e si sposta il prezzo di quella quantita' moltiplicata per
+    kappa. kappa=0 e' il mercato puro. La struttura e' obbligata dai dati: deviare dal
+    mercato senza ancorarcisi peggiora, misurato.
+    """
+    if not history:
+        return frame["mercato"]
+    train = pd.concat(history, ignore_index=True).dropna(subset=SIGNALS + ["realizzato", "mercato"])
+    if len(train) < 300:
+        return frame["mercato"]
+
+    def design(d):
+        cols = [d["mercato"].rank(pct=True)] + [d[c].rank(pct=True) for c in SIGNALS]
+        return np.column_stack([np.ones(len(d))] + [c.to_numpy() for c in cols])
+
+    beta, *_ = np.linalg.lstsq(design(train), train["realizzato"].rank(pct=True).to_numpy(), rcond=None)
+    test = frame.copy()
+    for c in SIGNALS:
+        test[c] = test[c].fillna(test[c].median())
+    predicted = design(test) @ beta
+    disagreement = pd.Series(predicted, index=test.index).rank(pct=True) - test["mercato"].rank(pct=True)
+    return (test["mercato"] * (1 + kappa * disagreement)).round().clip(lower=MIN_PRICE)
+
+
+def original_price(frame: pd.DataFrame, quality: str = "punti_attesi") -> pd.Series:
+    """Il listino dell'advisor originale di fishertiger.
+
+    Ancora il prezzo al valore di mercato riscalato per ruolo sulla ripartizione
+    cablata (P 7 / D 18 / C 25 / A 50), poi il tetto d'offerta e' quel prezzo per un
+    moltiplicatore di qualita' limitato a [0.75, 1.25]: il valore proiettato puo'
+    spostare l'offerta al massimo di un quarto rispetto al mercato.
+    """
+    price = pd.Series(MIN_PRICE, index=frame.index, dtype=float)
+    for role, share in ORIGINAL_SPLIT.items():
+        demand = SLOTS[role] * PARTICIPANTS
+        group = frame[frame.R == role].nlargest(demand, "Qt.I")
+        target = share * CREDITS * PARTICIPANTS
+        total = group["Qt.I"].sum()
+        scale = target / total if total > 0 else 1.0
+        mask = frame.R == role
+        price[mask] = (frame.loc[mask, "Qt.I"] * scale).clip(lower=MIN_PRICE)
+        # Moltiplicatore di qualita': margine sul cutoff della domanda di lega,
+        # normalizzato e schiacciato dentro [0.75, 1.25].
+        ranked = frame[mask].sort_values(quality, ascending=False)
+        cutoff = ranked[quality].iloc[min(demand, len(ranked)) - 1] if len(ranked) else 0.0
+        value = frame.loc[mask, quality].fillna(0.0)
+        edge = (value - cutoff) / np.maximum(1.0, np.maximum(value, cutoff))
+        price[mask] = price[mask] * (1 + edge * 0.4).clip(0.75, 1.25)
+    return price.round().clip(lower=MIN_PRICE)
+
+
 def run_auction(frame: pd.DataFrame, model_team: int, rng) -> list[list[int]]:
     """Asta sequenziale: si chiamano i giocatori in ordine di prezzo di mercato
     decrescente, ciascuno offre fino alla propria disponibilita', vince chi offre di piu'
@@ -231,13 +319,15 @@ def run_auction(frame: pd.DataFrame, model_team: int, rng) -> list[list[int]]:
             legal_max = credits[team] - RESERVE * (open_slots - 1)
             if legal_max < MIN_PRICE:
                 continue
-            if team == model_team and USE_INSURANCE:
-                # Al prezzo di listino si somma il valore assicurativo, che dipende da
-                # come sta messa la rosa in quel momento.
-                owned = frame[frame.Id.isin(rosters[team])]
-                profile = {r: list(owned[owned.R == r].pv_atteso / MATCHDAYS) for r in SLOTS}
-                extra = insurance_value(profile, role, float(row.pv_atteso) / MATCHDAYS, rng)
-                base = row.modello + extra * credits_per_point
+            if team == model_team:
+                base = row.modello
+                if USE_INSURANCE:
+                    # Al listino si somma il valore assicurativo, che dipende da come
+                    # sta messa la rosa in quel momento.
+                    owned = frame[frame.Id.isin(rosters[team])]
+                    profile = {r: list(owned[owned.R == r].pv_atteso / MATCHDAYS) for r in SLOTS}
+                    extra = insurance_value(profile, role, float(row.pv_atteso) / MATCHDAYS, rng)
+                    base = base + extra * credits_per_point
             else:
                 base = row.mercato
             # Rumore moltiplicativo su TUTTI, modello compreso. Se solo gli avversari
@@ -306,10 +396,22 @@ def season_points(roster: pd.DataFrame, rng, iterations: int = 40) -> float:
     return float(np.mean(totals))
 
 
+CACHE: dict[str, pd.DataFrame] = {}
+CACHE_OK: set[str] = set()
+
+
+def load_cached(season: str) -> pd.DataFrame:
+    if season not in CACHE:
+        frame = load(season)
+        frame["mercato"] = market_price(frame)
+        CACHE[season] = frame
+        CACHE_OK.add(season)
+    return CACHE[season]
+
+
 def main() -> None:
     import sys
     alphas = [float(a) for a in sys.argv[1:]] or [1.0]
-    rng = np.random.default_rng(20262027)
     rows = []
     for alpha in alphas:
       for season in TEST_SEASONS:
@@ -317,8 +419,30 @@ def main() -> None:
         frame["mercato"] = market_price(frame)
         global USE_INSURANCE
         # -2 mercato puro | -1 mercato + assicurazione | -3 modello senza assicurazione
-        USE_INSURANCE = alpha not in (-2.0, -3.0)
-        if alpha == -3:
+        USE_INSURANCE = alpha < 0 and alpha not in (-2.0, -3.0, -4.0, -5.0)
+        if alpha >= 10:
+            for s2 in ALL_SEASONS[3:ALL_SEASONS.index(season)]:
+                load_cached(s2)
+        if alpha >= 10:
+            # kappa = alpha - 10: quanto ci si stacca dal mercato seguendo il modello
+            # addestrato sulle sole stagioni precedenti.
+            past = [load_cached(s2) for s2 in ALL_SEASONS[:ALL_SEASONS.index(season)] if s2 in CACHE_OK]
+            frame["modello"] = fitted_price(frame, past, alpha - 10.0)
+        elif alpha >= 2:
+            # Miscela fra prezzo di mercato e prezzo del modello: lambda = alpha - 2.
+            # lambda 0 = solo mercato, lambda 1 = solo modello. Serve a misurare QUANTO
+            # conviene deviare dal mercato, invece di deciderlo a priori.
+            lam = alpha - 2.0
+            frame["modello"] = ((1 - lam) * frame["mercato"]
+                                + lam * model_price(frame, 1.0)).round().clip(lower=MIN_PRICE)
+        elif alpha == -5:
+            # Originale, ma il moltiplicatore di qualita' usa il valore sopra rimpiazzo
+            # pesato per la posizione nell'XI invece dei punti totali. Isola il
+            # contributo dei pesi posizionali dal resto.
+            frame["modello"] = original_price(frame, quality="valore")
+        elif alpha == -4:
+            frame["modello"] = original_price(frame)
+        elif alpha == -3:
             frame["modello"] = model_price(frame, 1.0)
         elif alpha < 0:
             # Arm di controllo: stessa informazione degli avversari (il prezzo di
@@ -329,7 +453,14 @@ def main() -> None:
             frame["valore"] = frame["mercato"]
         else:
             frame["modello"] = model_price(frame, alpha)
-        for seat in range(0, PARTICIPANTS, 2):
+        for seat_rep in range(PARTICIPANTS * REPETITIONS):
+            seat = seat_rep % PARTICIPANTS
+            # Numeri casuali comuni: lo stesso seme per ogni coppia (stagione, posto),
+            # indipendente dall'arm. Cosi' tutti gli arm affrontano le stesse aste e le
+            # stesse estrazioni di valutazione, e la differenza fra due arm non e'
+            # sporcata dal caso. Con una varianza fra stagioni di 500-600 punti senza
+            # questo accorgimento nessuna differenza sarebbe leggibile.
+            rng = np.random.default_rng(abs(hash((season, seat_rep))) % (2**32))
             rosters = run_auction(frame, seat, rng)
             sizes = [len(r) for r in rosters]
             if min(sizes) != sum(SLOTS.values()):
@@ -340,7 +471,7 @@ def main() -> None:
             rows.append({
                 "alpha": alpha,
                 "stagione": season[2:7],
-                "posto": seat,
+                "posto": seat_rep,
                 "punti_modello": points[seat],
                 "punti_avversari_medi": float(np.mean([p for i, p in enumerate(points) if i != seat])),
                 "punti_miglior_avversario": float(max(p for i, p in enumerate(points) if i != seat)),
