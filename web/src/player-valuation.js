@@ -46,6 +46,107 @@ export const projectedContribution = (player, matchdayIndices = null) => {
   );
 };
 
+/** Media, sulle giornate, della probabilita' di prendere voto. */
+const averageAvailability = (player) => {
+  const chances = Array.isArray(player?.p_gioca_per_giornata)
+    ? player.p_gioca_per_giornata
+    : [];
+  return chances.length
+    ? chances.reduce((sum, value) => sum + finite(value), 0) / chances.length
+    : finite(player?.proiezione?.p_gioca);
+};
+
+/** Fantavoto medio a partita, cioe' quanto porta quando gioca. */
+export const perMatchValue = (player) => {
+  const votes = Array.isArray(player?.voto_puro_mean_per_giornata)
+    ? player.voto_puro_mean_per_giornata
+    : [];
+  const bonuses = Array.isArray(player?.bonus_atteso_per_giornata)
+    ? player.bonus_atteso_per_giornata
+    : [];
+  if (!votes.length) {
+    return finite(player?.proiezione?.voto_puro) + finite(player?.proiezione?.bonus);
+  }
+  return (
+    votes.reduce((sum, value, day) => sum + finite(value) + finite(bonuses[day]), 0) /
+    votes.length
+  );
+};
+
+/** Quanti giocatori per ruolo scendono in campo in tutta la lega ogni giornata,
+ *  ricavato dalla media dei moduli ammessi. */
+export const fieldedPerRole = (rules) => {
+  const formations = Array.isArray(rules?.formations) ? rules.formations : [];
+  const participants = Math.max(1, Number(rules?.participants) || 1);
+  if (!formations.length) return { P: participants, D: 4 * participants, C: 4 * participants, A: 2 * participants };
+  const totals = formations.reduce(
+    (acc, formation) => {
+      const [defenders, midfielders, attackers] = Array.isArray(formation)
+        ? formation
+        : String(formation).split("-").map(Number);
+      return {
+        D: acc.D + finite(defenders),
+        C: acc.C + finite(midfielders),
+        A: acc.A + finite(attackers),
+      };
+    },
+    { D: 0, C: 0, A: 0 },
+  );
+  return {
+    P: participants,
+    D: Math.round((totals.D / formations.length) * participants),
+    C: Math.round((totals.C / formations.length) * participants),
+    A: Math.round((totals.A / formations.length) * participants),
+  };
+};
+
+/** Livello di rimpiazzo per ruolo: il fantavoto a partita del giocatore marginale fra
+ *  quelli che vengono DAVVERO schierati nella lega.
+ *
+ *  Serve perche' sommare i punti attesi equivale a dire che nelle giornate in cui il
+ *  giocatore non c'e' la squadra prende zero. Falso: schieri il sostituto. Il valore
+ *  vero di un giocatore e' quanto rende in piu' di chi giocherebbe al posto suo, e
+ *  questo cambia la classifica: chi ha un fantavoto altissimo ma salta partite vale
+ *  molto piu' di quanto dica il totale stagionale. */
+export const replacementLevels = (players, rules) => {
+  const fielded = fieldedPerRole(rules);
+  return Object.fromEntries(
+    Object.keys(rules.rosterSlots).map((role) => {
+      const starters = players
+        .filter((player) => player.ruolo === role && averageAvailability(player) >= 0.5)
+        .map(perMatchValue)
+        .sort((a, b) => b - a);
+      if (!starters.length) return [role, 0];
+      const index = Math.min(fielded[role] || starters.length, starters.length) - 1;
+      return [role, starters[Math.max(0, index)]];
+    }),
+  );
+};
+
+/** Valore stagionale sopra il livello di rimpiazzo. */
+export const valueAboveReplacement = (player, level, matchdayIndices = null) => {
+  const chances = Array.isArray(player?.p_gioca_per_giornata) ? player.p_gioca_per_giornata : [];
+  const votes = Array.isArray(player?.voto_puro_mean_per_giornata) ? player.voto_puro_mean_per_giornata : [];
+  const bonuses = Array.isArray(player?.bonus_atteso_per_giornata) ? player.bonus_atteso_per_giornata : [];
+  if (!chances.length) {
+    const days = Array.isArray(matchdayIndices) && matchdayIndices.length ? matchdayIndices.length : 38;
+    const projection = player?.proiezione || {};
+    return (
+      days *
+      finite(projection.p_gioca) *
+      (finite(projection.voto_puro) + finite(projection.bonus) - level)
+    );
+  }
+  const days = Array.isArray(matchdayIndices) && matchdayIndices.length
+    ? matchdayIndices
+    : chances.map((_, day) => day);
+  return days.reduce(
+    (sum, day) =>
+      sum + finite(chances[day]) * (finite(votes[day]) + finite(bonuses[day]) - level),
+    0,
+  );
+};
+
 export const createRoleValuation = (players, rules) => {
   const roles = Object.keys(rules.rosterSlots);
   const participants = Math.max(1, Number(rules.participants) || 1);

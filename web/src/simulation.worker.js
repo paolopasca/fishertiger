@@ -2,7 +2,9 @@ import { normalizeRules } from "./league-rules.js";
 import {
   createRoleValuation,
   projectedContribution,
+  replacementLevels,
   sourceFvm,
+  valueAboveReplacement,
 } from "./player-valuation.js";
 import { expectedDefenseModifier } from "./defense-modifier.js";
 import { auctionPriceAtOrBelow } from "./auction-state.js";
@@ -385,7 +387,9 @@ export const evaluateOverview = (data = {}) => {
   const costFor = (item) =>
     estimatedCost(item, market, scarcity, valuation.normalizedFvm);
   const budgetPlan = roleBudgetPlan(records, ownerIndex, needs, rules);
-  const valueFor = (player) => contribution(player, rules);
+  const levels = replacementLevels([...pool, ...records.map((record) => record.player)], rules);
+  const valueFor = (player) =>
+    valueAboveReplacement(player, finite(levels[player?.ruolo]), rules.horizons?.currentLeague?.matchdayIndices);
 
   const plans = Object.fromEntries(
     roles.map((role) => {
@@ -546,7 +550,14 @@ export const evaluateAuction = (data = {}) => {
   // livello ogni giocatore costa il minimo e vale uguale. Il surplus totale ancora in
   // palio e' quindi il denominatore corretto, e per costruzione la somma dei prezzi cosi'
   // ottenuti eguaglia i crediti ancora spendibili nella lega.
-  const valueFor = (item) => contribution(item, rules);
+  // Il valore di un giocatore e' quanto rende IN PIU' di chi giocherebbe al posto suo,
+  // non il totale dei suoi punti: nelle giornate in cui non c'e', la squadra non prende
+  // zero, schiera il sostituto. Senza questa correzione un giocatore da fantavoto altis-
+  // simo che salta partite finisce dietro a un titolare mediocre, e il modello sbaglia
+  // esattamente sui big.
+  const levels = replacementLevels([player, ...pool, ...records.map((record) => record.player)], rules);
+  const valueFor = (item) =>
+    valueAboveReplacement(item, finite(levels[item?.ruolo]), rules.horizons?.currentLeague?.matchdayIndices);
   const perTeamShare = Math.max(1, Number(rules.participants) || 1);
   // Posizione di ogni giocatore dentro il proprio ruolo nel pool residuo: serve sia al
   // prezzo del modello sia al denominatore, e va calcolata una volta sola.
