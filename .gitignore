@@ -20,3 +20,4 @@ config/profiles/
 .env.*
 !.env.example
 *.log
+.log/
