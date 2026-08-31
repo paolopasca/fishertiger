@@ -6,6 +6,7 @@ import {
 } from "./player-valuation.js";
 import { expectedDefenseModifier } from "./defense-modifier.js";
 import { auctionPriceAtOrBelow } from "./auction-state.js";
+import { positionWeight, weightedGroupValue } from "./xi-weights.js";
 const EMPTY = -1e15;
 
 const finite = (value, fallback = 0) =>
@@ -249,18 +250,29 @@ const estimatedCost = (
 
 // Returns the best exact-count value for every budget. Descending loops ensure
 // each available player can be selected only once.
-const roleFrontier = (players, count, budget, costFor, valueFor) => {
+//
+// I candidati si scorrono in ordine di valore decrescente: cosi' chi entra come
+// `selected`-esimo acquisto e' davvero il `selected`-esimo migliore fra quelli comprati,
+// e gli spetta il peso posizionale di quella posizione. `ownedValues` sono i giocatori
+// del ruolo gia' in rosa, che occupano le posizioni davanti a lui.
+const roleFrontier = (players, count, budget, costFor, valueFor, role, ownedValues = []) => {
   const dp = Array.from({ length: count + 1 }, () => {
     const row = new Float64Array(budget + 1);
     row.fill(EMPTY);
     return row;
   });
   dp[0].fill(0);
-  for (const player of players) {
+  const ordered = [...players].sort((a, b) => valueFor(b) - valueFor(a));
+  for (const player of ordered) {
     const cost = costFor(player);
     if (cost > budget) continue;
-    const value = valueFor(player);
+    const raw = valueFor(player);
+    const ownedAbove = ownedValues.reduce(
+      (total, value) => total + (value > raw ? 1 : 0),
+      0,
+    );
     for (let selected = count; selected >= 1; selected--) {
+      const value = raw * positionWeight(role, ownedAbove + selected - 1);
       const current = dp[selected];
       const previous = dp[selected - 1];
       for (let credits = budget; credits >= cost; credits--) {
@@ -280,13 +292,21 @@ const roleFrontier = (players, count, budget, costFor, valueFor) => {
   return result;
 };
 
-const completionFrontier = (pool, needs, budget, costFor, valueFor) => {
+const completionFrontier = (pool, needs, budget, costFor, valueFor, owned = {}) => {
   let combined = new Float64Array(budget + 1);
   combined.fill(0);
   for (const role of Object.keys(needs)) {
     if (!needs[role]) continue;
     const rolePlayers = pool.filter((player) => player.ruolo === role);
-    const roleValues = roleFrontier(rolePlayers, needs[role], budget, costFor, valueFor);
+    const roleValues = roleFrontier(
+      rolePlayers,
+      needs[role],
+      budget,
+      costFor,
+      valueFor,
+      role,
+      owned[role] || [],
+    );
     const next = new Float64Array(budget + 1);
     next.fill(EMPTY);
     for (let credits = 0; credits <= budget; credits++) {
@@ -510,8 +530,85 @@ export const evaluateAuction = (data = {}) => {
   const competition = Object.fromEntries(
     roles.map((role) => [role, opponentModel(role, teams, ownerIndex, rules)]),
   );
-  const costFor = (item) =>
-    estimatedCost(item, market, scarcity, valuation.normalizedFvm);
+  const leagueCreditsLeft = teams.reduce(
+    (sum, item) => sum + Math.max(0, Math.floor(finite(item?.credits))),
+    0,
+  );
+  const leagueSlotsLeft = teams.reduce(
+    (sum, item) => sum + totalNeeds(roleNeeds(item, rules)),
+    0,
+  );
+  const discretionaryCredits = Math.max(
+    0,
+    leagueCreditsLeft - leagueSlotsLeft * rules.auction.reserve,
+  );
+  // I crediti sopra la riserva comprano soltanto il valore SOPRA il rimpiazzo: sotto quel
+  // livello ogni giocatore costa il minimo e vale uguale. Il surplus totale ancora in
+  // palio e' quindi il denominatore corretto, e per costruzione la somma dei prezzi cosi'
+  // ottenuti eguaglia i crediti ancora spendibili nella lega.
+  const valueFor = (item) => contribution(item, rules);
+  const perTeamShare = Math.max(1, Number(rules.participants) || 1);
+  // Posizione di ogni giocatore dentro il proprio ruolo nel pool residuo: serve sia al
+  // prezzo del modello sia al denominatore, e va calcolata una volta sola.
+  const roleRanks = Object.fromEntries(
+    roles.map((role) => [
+      role,
+      new Map(
+        pool
+          .filter((item) => item.ruolo === role)
+          .sort((a, b) => valueFor(b) - valueFor(a))
+          .map((item, index) => [playerKey(item), index]),
+      ),
+    ]),
+  );
+  const roleSurplus = Object.fromEntries(
+    roles.map((role) => {
+      const demand = scarcity[role]?.demand || 0;
+      const ranked = pool
+        .filter((item) => item.ruolo === role)
+        .map(valueFor)
+        .sort((a, b) => b - a);
+      if (!demand || !ranked.length) return [role, { level: 0, total: 0 }];
+      const level = ranked[Math.min(demand, ranked.length) - 1];
+      // Ogni giocatore sorteggiato occupa nella sua rosa la posizione floor(i/squadre),
+      // quindi il suo surplus va pesato con quel peso posizionale: cosi' il denominatore
+      // e' omogeneo al numeratore e la somma dei prezzi torna al budget della lega.
+      return [
+        role,
+        {
+          level,
+          total: ranked
+            .slice(0, demand)
+            .reduce(
+              (sum, value, index) =>
+                sum +
+                positionWeight(role, Math.floor(index / perTeamShare)) *
+                Math.max(0, value - level),
+              0,
+            ),
+        },
+      ];
+    }),
+  );
+  const draftableSurplus = roles.reduce(
+    (sum, role) => sum + roleSurplus[role].total,
+    0,
+  );
+  const creditsPerValue =
+    draftableSurplus > 0 ? discretionaryCredits / draftableSurplus : 0;
+  // Prezzo equo del modello: quota del budget discrezionale proporzionale al surplus.
+  const modelPrice = (item) => {
+    const role = item?.ruolo;
+    const level = finite(roleSurplus[role]?.level);
+    const rank = (roleRanks[role] || new Map()).get(playerKey(item)) ?? 0;
+    const weight = positionWeight(role, Math.floor(rank / perTeamShare));
+    return Math.max(
+      rules.auction.minPrice,
+      rounded(rules.auction.minPrice + weight * Math.max(0, valueFor(item) - level) * creditsPerValue),
+    );
+  };
+
+  const costFor = (item) => modelPrice(item);
   const candidateCost = estimatedCost(
     player,
     market,
@@ -520,7 +617,6 @@ export const evaluateAuction = (data = {}) => {
     competition[player.ruolo],
   );
   const budgetPlan = roleBudgetPlan(records, ownerIndex, needs, rules);
-  const valueFor = (item) => contribution(item, rules);
   const roleBidCap = budgetPlan[player.ruolo].bidCap;
 
   const roleAlternatives = pool
@@ -538,7 +634,51 @@ export const evaluateAuction = (data = {}) => {
   const replacement =
     replacementIndex == null ? null : roleAlternatives[replacementIndex];
   const candidateValue = valueFor(player);
-  const individualMarginalValue = candidateValue - finite(replacement?.value);
+  // Valore marginale sotto l'obiettivo XI: non la differenza secca col rimpiazzo, ma di
+  // quanto cresce il gruppo di ruolo pesato per posizione se lo slot vuoto lo riempie il
+  // candidato invece del miglior disponibile. Un ottavo difensore muove pochissimo il
+  // gruppo anche se preso da solo vale tanto.
+  const ownedValues = Object.fromEntries(
+    roles.map((role) => [
+      role,
+      (team.roster || [])
+        .filter((item) => item.ruolo === role)
+        .map((item) => valueFor(item)),
+    ]),
+  );
+  const roleOwned = ownedValues[player.ruolo] || [];
+  // Il termine di confronto e' il livello di rimpiazzo, non il miglior disponibile: in
+  // asta il migliore te lo porta via un avversario, il cutoff della domanda di lega e'
+  // cio' che ti resta davvero.
+  const fillerValues = Array.from(
+    { length: needs[player.ruolo] },
+    () => finite(replacement?.value),
+  );
+  const individualMarginalValue =
+    weightedGroupValue(
+      [...roleOwned, candidateValue, ...fillerValues.slice(0, Math.max(0, needs[player.ruolo] - 1))],
+      player.ruolo,
+    ) - weightedGroupValue([...roleOwned, ...fillerValues], player.ruolo);
+  // Posizione che il candidato occuperebbe nella rosa FINALE del suo ruolo, non solo
+  // rispetto a chi c'e' gia': a inizio asta la rosa e' vuota e conterebbero tutti come
+  // primi del ruolo. Agli slot ancora aperti si assegnano i migliori disponibili, quindi
+  // davanti a lui finiscono anche quelli che comprera' dopo.
+  const betterInPool = roleAlternatives.reduce(
+    (total, item) => total + (item.value > candidateValue ? 1 : 0),
+    0,
+  );
+  // Dei giocatori migliori di lui rimasti nel pool non ne prendo io la totalita': si
+  // spartiscono fra tutte le squadre, quindi davanti a me ne finisce circa un
+  // partecipante su `participants`. E' la stessa regola usata nel denominatore del
+  // prezzo equo, cosi' numeratore e denominatore restano omogenei.
+  const participants = Math.max(1, Number(rules.participants) || 1);
+  const candidatePosition =
+    roleOwned.reduce((total, value) => total + (value > candidateValue ? 1 : 0), 0) +
+    Math.min(
+      Math.max(0, needs[player.ruolo] - 1),
+      Math.floor(betterInPool / participants),
+    );
+  const candidateWeight = positionWeight(player.ruolo, candidatePosition);
   const currentDefenseValue = defenseValue(team.roster || [], rules);
   const candidateDefenseValue = defenseValue([...(team.roster || []), player], rules);
   const alternativeDefenseValue = replacement
@@ -561,19 +701,79 @@ export const evaluateAuction = (data = {}) => {
       ) *
       rules.auction.increment;
 
-  const baseline = completionFrontier(pool, needs, credits, costFor, valueFor);
+  const baseline = completionFrontier(pool, needs, credits, costFor, valueFor, ownedValues);
   const withNeeds = { ...needs, [player.ruolo]: needs[player.ruolo] - 1 };
-  const withCandidate = completionFrontier(pool, withNeeds, credits, costFor, valueFor);
+  // Con il candidato in rosa il suo valore entra fra i posseduti del ruolo: gli slot
+  // che restano da riempire partono dalla posizione successiva.
+  const ownedWithCandidate = {
+    ...ownedValues,
+    [player.ruolo]: [...(ownedValues[player.ruolo] || []), candidateValue],
+  };
+  const withCandidate = completionFrontier(pool, withNeeds, credits, costFor, valueFor, ownedWithCandidate);
   const baselineValue = baseline[credits];
   const baselineFeasible = baselineValue > EMPTY / 2;
-  let maxBid = 0;
+  // Due grandezze distinte, entrambe monotone nel prezzo perche' le frontiere sono non
+  // decrescenti nel budget.
+  //   feasibilityMax   prezzo massimo che lascia ancora completabile la rosa;
+  //   indifferencePrice prezzo oltre il quale la rosa migliore completabile SENZA il
+  //                     candidato vale piu' di quella che lo include.
+  // Il secondo non e' un tetto: il suo termine di confronto e' la rosa teoricamente
+  // ottima ai prezzi stimati, irraggiungibile in un'asta vera, quindi vale zero per
+  // chiunque non entri nei 25 ideali. Serve come segnale "e' nel mio piano", e alza la
+  // disponibilita' a pagare sopra il prezzo equo quando il giocatore e' davvero centrale.
+  // Le frontiere sono pesate per posizione: il termine del candidato deve esserlo
+  // altrettanto, altrimenti si confronta un valore grezzo con una somma pesata e ogni
+  // riserva sembra indispensabile.
+  const candidateTotalValue = candidateWeight * candidateValue + defenseMarginalValue;
+  let feasibilityMax = 0;
+  let indifferencePrice = 0;
+  let stillIndifferent = true;
   for (
     let bid = rules.auction.minPrice;
-    bid <= Math.min(legalMax, valueCap, roleBidCap);
+    bid <= legalMax;
     bid += rules.auction.increment
   ) {
-    if (withCandidate[credits - bid] > EMPTY / 2) maxBid = bid;
+    const completion = withCandidate[credits - bid];
+    if (completion <= EMPTY / 2) break;
+    feasibilityMax = bid;
+    if (
+      stillIndifferent &&
+      baselineFeasible &&
+      candidateTotalValue + completion < baselineValue
+    ) {
+      stillIndifferent = false;
+    }
+    if (stillIndifferent) indifferencePrice = bid;
   }
+  // Tasso di cambio della lega fra valore e crediti, dall'identita' contabile: i crediti
+  // ancora spendibili si distribuiranno sul valore ancora da assegnare. Serve perche' il
+  // solo prezzo di indifferenza sale fino al massimo legale quando restano crediti senza
+  // altri slot su cui spenderli: li' non c'e' costo opportunita', ma il prezzo resta
+  // ingiusto rispetto a quanto un credito compra altrove.
+  const candidateSurplus = Math.max(
+    0,
+    candidateTotalValue - candidateWeight * finite(roleSurplus[player.ruolo]?.level),
+  );
+  // Prezzo del modello: quota del budget discrezionale proporzionale al surplus pesato.
+  // Per costruzione la somma dei prezzi sui giocatori ancora da assegnare eguaglia i
+  // crediti ancora spendibili nella lega, quindi si adatta da solo a come sta andando
+  // l'asta. Sostituisce il costo derivato dal FVM: valori e prezzi devono vivere nella
+  // stessa scala, altrimenti il knapsack confronta grandezze incoerenti.
+  const exchangeCap = Math.max(
+    rules.auction.minPrice,
+    rounded(rules.auction.minPrice + candidateSurplus * creditsPerValue),
+  );
+
+  // Disponibilita' a pagare: il prezzo equo del modello, alzato dal prezzo di indifferenza
+  // quando il giocatore e' centrale nel piano rosa. Poi i vincoli duri.
+  const willingness = Math.max(exchangeCap, indifferencePrice);
+  const maxBid =
+    feasibilityMax < rules.auction.minPrice
+      ? 0
+      : auctionPriceAtOrBelow(
+        Math.min(willingness, feasibilityMax, legalMax, roleBidCap),
+        rules,
+      ) ?? 0;
 
   const idealMax =
     auctionPriceAtOrBelow(
@@ -717,6 +917,11 @@ export const evaluateAuction = (data = {}) => {
       replacementValue: rounded(replacement?.value),
       replacementRank: replacementIndex == null ? null : replacementIndex + 1,
       marginalValue: rounded(marginalValue),
+      indifferencePrice,
+      feasibilityMax,
+      exchangeCap,
+      creditsPerValue: Number(creditsPerValue.toFixed(4)),
+      // Tetto ancorato al mercato: non vincola piu' l'offerta, resta per diagnosi.
       marketValueCap: valueCap,
       roleBudgetTarget: rounded(budgetPlan[player.ruolo].target),
       roleBudgetRemaining: rounded(budgetPlan[player.ruolo].remaining),
