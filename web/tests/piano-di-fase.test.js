@@ -192,7 +192,7 @@ test("il tetto della lista coincide con quello del consiglio sul singolo giocato
   }
 });
 
-test("la lista e' ordinata per margine fra tetto e prezzo atteso", () => {
+test("la lista e' ordinata per prezzo di mercato atteso", () => {
   const teams = [
     team("Mine", 500, { P: 3, D: 8, C: 8, A: 6 }),
     team("Rivale", 500, { P: 3, D: 8, C: 8, A: 6 }),
@@ -208,7 +208,58 @@ test("la lista e' ordinata per margine fra tetto e prezzo atteso", () => {
     rules: PER_RUOLO,
   });
 
-  const margini = result.items.map((item) => item.maxBid - item.marketPrice);
-  const ordinati = [...margini].sort((a, b) => b - a);
-  assert.deepEqual(margini, ordinati);
+  const prezzi = result.items.map((item) => item.marketPrice);
+  const ordinati = [...prezzi].sort((a, b) => b - a);
+  assert.deepEqual(prezzi, ordinati);
+});
+
+test("chi costa piu' del tetto resta in lista invece di sparire", () => {
+  // La regressione da evitare: ordinando per margine, il migliore del reparto usciva
+  // dalla lista proprio perche' costoso, e all'asta non lo si vedeva piu'. Il prezzo lo
+  // fa la contesa, non la stima: chiamarlo e lasciarlo andare non costa niente.
+  const teams = [
+    team("Mine", 40, { P: 3, D: 8, C: 8, A: 6 }),
+    team("Ricca", 500, { P: 3, D: 8, C: 8, A: 6 }),
+  ];
+  // Un portiere molto sopra gli altri, con un budget che non lo copre.
+  const stella = player("P", 14, { fvm_scaled: 400, nome: "Stella" });
+  const remaining = [stella, ...pool("P", 12), ...pool("D", 20)];
+
+  const result = evaluateShortlist({
+    teams,
+    mine: teams[0],
+    owner: 0,
+    remaining,
+    assigned: {},
+    rules: PER_RUOLO,
+  });
+
+  const voce = result.items.find((item) => item.id === stella.id);
+  assert.ok(voce, "il piu' caro del reparto deve restare chiamabile");
+  assert.ok(
+    voce.maxBid < voce.marketPrice,
+    `il caso serve solo se il tetto sta sotto il prezzo atteso (tetto ${voce.maxBid}, mercato ${voce.marketPrice})`,
+  );
+  assert.equal(result.items[0].id, stella.id, "e sta in cima, perche' l'ordine e' il prezzo");
+});
+
+test("la lista dichiara quanti ne restano fuori", () => {
+  const teams = [
+    team("Mine", 500, { P: 3, D: 8, C: 8, A: 6 }),
+    team("Rivale", 500, { P: 3, D: 8, C: 8, A: 6 }),
+  ];
+  const remaining = pool("P", 40);
+
+  const result = evaluateShortlist({
+    teams,
+    mine: teams[0],
+    owner: 0,
+    remaining,
+    assigned: {},
+    rules: PER_RUOLO,
+  });
+
+  assert.equal(result.callableLeft, 40);
+  assert.equal(result.items.length + result.notShown, 40);
+  assert.ok(result.notShown > 0, "con quaranta candidati la lista e' troncata e deve dirlo");
 });

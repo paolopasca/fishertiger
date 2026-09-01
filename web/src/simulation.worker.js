@@ -1037,25 +1037,33 @@ export const evaluateAuction = (data = {}) => {
 
 /* Chi si puo' chiamare adesso, in ordine di quanto conviene pagarlo.
  *
- * L'ordine e' per margine, cioe' tetto d'offerta meno prezzo atteso. Ordinare per solo
- * tetto non distingue nulla: quando il budget di ruolo fa da tappo, meta' del reparto
- * finisce sullo stesso numero (misurato: sette portieri su otto a 34 con 35 crediti
- * destinati al ruolo). Il margine dice invece dove il budget ha spazio per vincere la
- * contesa senza sforare il piano, che e' la domanda del momento.
+ * L'ordine e' il prezzo di mercato atteso, e nessuno viene escluso.
  *
- * Il margine non e' una scommessa contro il mercato: nasce da budget residuo, slot
- * scoperti e prezzi attesi, non da una pretesa di valutare meglio i giocatori.
+ * Due criteri scartati, con la ragione. Ordinare per tetto d'offerta appiattisce il
+ * reparto: quando il budget di ruolo fa da tappo meta' dei candidati finisce sullo
+ * stesso numero (misurato, sette portieri su otto a 34 con 35 crediti sul ruolo).
+ * Ordinare per margine, cioe' tetto meno prezzo atteso, e' peggio: tratta una
+ * previsione come se fosse un prezzo. Il prezzo si forma all'asta, e chiamare un
+ * giocatore non costa niente se poi non lo si prende. O il rilancio supera il tetto e
+ * si lascia, avendo intanto consumato il budget di un rivale, oppure resta sotto e lo
+ * si prende sotto il suo valore. Escludere dalla lista chi ha margine negativo toglie
+ * un'opzione che dal lato della perdita vale zero.
  *
- * Si valuta un sovrainsieme dei candidati mostrati, scelto per prezzo di mercato che e'
- * gratis, e poi si riordina per tetto. Valutare tutto il pool costerebbe secondi;
- * sedici candidati costano una settantina di millisecondi a inizio asta e meno dopo,
- * perche' il pool si svuota.
+ * Restano due decisioni distinte che non vanno confuse: chi chiamare adesso, che e'
+ * questa lista, e fino a quanto pagarlo, che resta il tetto di `evaluateAuction`. Un
+ * candidato con tetto sotto il prezzo atteso resta in lista, e la sua raccomandazione
+ * lo dice gia'.
+ *
+ * Il limite di righe non e' estetico: ogni riga costa una valutazione completa.
+ * Misurato sui dati veri, 21 ms a riga sui portieri (il ruolo piu' caro) e 10 sugli
+ * altri, quindi 25 righe stanno sotto il mezzo secondo mentre l'intero reparto
+ * difensivo ne costerebbe due. Chi resta fuori si raggiunge scrivendo il nome, che
+ * porta allo stesso consiglio.
  *
  * Ogni candidato passa per lo stesso `evaluateAuction` del percorso normale, con lo
  * stesso payload: il numero della lista e quello che compare cliccando il nome devono
  * coincidere, altrimenti lo strumento si contraddice davanti all'utente. */
-const SHORTLIST_SHOWN = 8;
-const SHORTLIST_EVALUATED = 16;
+const SHORTLIST_SHOWN = 25;
 
 export const evaluateShortlist = (data = {}) => {
   const rules = normalizeRules(data.rules);
@@ -1081,9 +1089,11 @@ export const evaluateShortlist = (data = {}) => {
     activeRole ? player.ruolo === activeRole : needs[player.ruolo] > 0,
   );
 
+  // La preselezione usa il FVM sorgente, che non costa niente; il riordino finale usa il
+  // prezzo stimato dal motore, cosi' la colonna che l'utente legge risulta monotona.
   const items = [...callable]
     .sort((a, b) => sourceFvm(b) - sourceFvm(a))
-    .slice(0, SHORTLIST_EVALUATED)
+    .slice(0, SHORTLIST_SHOWN)
     .map((player) => {
       const advice = evaluateAuction({ ...data, player });
       return {
@@ -1094,14 +1104,15 @@ export const evaluateShortlist = (data = {}) => {
         marketPrice: advice.summary?.estimatedMarketPrice ?? 0,
       };
     })
-    .map((item) => ({ ...item, headroom: item.maxBid - item.marketPrice }))
-    .sort((a, b) => b.headroom - a.headroom || b.maxBid - a.maxBid)
-    .slice(0, SHORTLIST_SHOWN);
+    .sort((a, b) => b.marketPrice - a.marketPrice || b.maxBid - a.maxBid);
 
   return {
     kind: "shortlist",
     activeRole,
     callableLeft: callable.length,
+    // Quanti restano fuori dalla lista: vanno dichiarati, altrimenti una lista troncata
+    // si legge come "questi sono tutti".
+    notShown: Math.max(0, callable.length - items.length),
     items,
   };
 };

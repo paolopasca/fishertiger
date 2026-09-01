@@ -649,8 +649,10 @@ function VerdictCard({
  * di ricerca. All'asta il tempo per giocatore e' di un minuto: la domanda "chi chiamo" va
  * risposta senza un clic in mezzo.
  *
- * L'ordine e' per margine, cioe' tetto meno prezzo atteso, non per prezzo: ordinare per
- * prezzo restituisce la classifica del listone, che l'utente ha gia' altrove. */
+ * L'ordine e' il prezzo di mercato atteso e non esclude nessuno, nemmeno chi costa piu'
+ * del tetto: chiamare non costa niente se poi non lo si prende, quindi togliere dalla
+ * lista chi sembra fuori portata toglie una scelta che non ha rovescio. Il tetto resta
+ * scritto accanto, insieme alla raccomandazione. */
 function CallList({ callList, players, onPick }) {
   const byId = useMemo(
     () => new Map((players || []).map((item) => [playerIdKey(item.id), item])),
@@ -734,8 +736,12 @@ function CallList({ callList, players, onPick }) {
         ))}
       </div>
       <p className="micro" style={{ marginTop: "var(--s-3)" }}>
-        In ordine di margine fra quanto puoi pagare e quanto ci si aspetta costi.
-        Tocca un nome per aprirlo, oppure scrivi sopra chi e' stato chiamato.
+        In ordine di prezzo atteso. Puoi chiamarli tutti: il prezzo lo fa l'asta, il
+        tetto dice solo dove ti fermi.
+        {callList.notShown
+          ? ` Altri ${callList.notShown} liberi in questo ruolo: scrivi il nome sopra per vederne il tetto.`
+          : ""}{" "}
+        Tocca un nome per aprirlo.
       </p>
     </section>
   );
