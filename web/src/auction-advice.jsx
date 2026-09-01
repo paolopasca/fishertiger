@@ -1,4 +1,5 @@
 import { nearestAuctionPrice } from "./auction-state.js";
+import { residualPerSlot } from "./residual-slots.js";
 import { Disclosure, RoleChip } from "./ui.jsx";
 
 export const RECOMMENDATION_LABELS = {
@@ -127,7 +128,28 @@ export function BidGauge({ advice, price, rules, legalMax }) {
           </span>
         ) : null}
       </div>
+      <ResidualLine advice={advice} price={price} rules={rules} />
     </div>
+  );
+}
+
+/** Riga sotto il misuratore: quanto resta per gli altri slot a questo prezzo. */
+export function ResidualLine({ advice, price, rules }) {
+  const residual = residualPerSlot({ advice, price, rules });
+  if (!residual) return null;
+  const { remaining, others, each, broke } = residual;
+  const tone = broke ? "stop" : each < 5 ? "warn" : each < 12 ? "" : "go";
+  return (
+    <p className={`residual${tone ? ` residual--${tone}` : ""}`}>
+      {broke ? (
+        <>Restano <b>{remaining}</b> crediti per <b>{others}</b> slot: non bastano.</>
+      ) : (
+        <>
+          Restano <b>{remaining}</b> crediti per <b>{others}</b> slot,{" "}
+          <b>{each.toFixed(each < 10 ? 1 : 0)}</b> a testa
+        </>
+      )}
+    </p>
   );
 }
 

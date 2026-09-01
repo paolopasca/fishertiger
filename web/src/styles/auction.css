@@ -618,3 +618,18 @@
     backdrop-filter: none;
   }
 }
+
+/* Riga del residuo sotto il misuratore d'offerta. Usa gli stessi toni dei verdetti,
+   ma con peso visivo minore: informa un vincolo, non da' un giudizio. */
+.residual {
+  margin: var(--s-3) 0 0;
+  padding-top: var(--s-3);
+  border-top: 1px solid var(--c-line-soft);
+  font-size: 13px;
+  color: var(--c-text-dim);
+}
+.residual b { color: var(--c-text); font-variant-numeric: tabular-nums; }
+.residual--go b { color: var(--c-go); }
+.residual--warn b { color: var(--c-warn); }
+.residual--stop { color: var(--c-stop); }
+.residual--stop b { color: var(--c-stop); }
