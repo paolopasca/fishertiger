@@ -9,6 +9,7 @@ import {
   reconcileAuctionDraft,
   slotsLeft,
 } from "../auction-state.js";
+import { auctionCandidates } from "../auction-candidates.js";
 import { normalizeRules } from "../league-rules.js";
 import {
   assignPlayer,
@@ -137,18 +138,16 @@ export default function AuctionView({
   );
   const canSetStartingCredits = !board.history.length && !board.undone.length;
 
-  const choices = useMemo(() => {
-    const needle = query.trim().toLowerCase();
-    if (needle.length < 2) return [];
-    return data.players
-      .filter(
-        (candidate) =>
-          !board.assigned[playerIdKey(candidate.id)] &&
-          (!activeRole || candidate.ruolo === activeRole) &&
-          candidate.nome.toLowerCase().includes(needle),
-      )
-      .slice(0, 8);
-  }, [data.players, board.assigned, activeRole, query]);
+  const choices = useMemo(
+    () =>
+      auctionCandidates({
+        players: data.players,
+        assigned: board.assigned,
+        activeRole,
+        query,
+      }),
+    [data.players, board.assigned, activeRole, query],
+  );
 
   /* The price box opens on the estimated market price so the common case needs
      no typing; the moment the user edits it we stop overwriting their number. */
@@ -321,12 +320,14 @@ export default function AuctionView({
                   <Icon name="close" />
                 </button>
               ) : null}
-              {suggestionsOpen && query.trim().length >= 2 ? (
+              {suggestionsOpen ? (
                 <div className="results" id="auction-results">
                   <span className="results-note">
-                    {choices.length
-                      ? `${choices.length} giocatori disponibili`
-                      : "Nessun giocatore disponibile"}
+                    {!choices.length
+                      ? "Nessun giocatore disponibile"
+                      : query.trim().length >= 2
+                        ? `${choices.length} giocatori disponibili`
+                        : "I piu' quotati ancora liberi in questa fase"}
                   </span>
                   <div className="rows">
                     {choices.map((candidate) => (
@@ -377,8 +378,8 @@ export default function AuctionView({
           ) : (
             <div className="card">
               <Empty title="Nessun giocatore in asta">
-                Scrivi almeno due lettere del nome chiamato per vedere il
-                consiglio e registrare il prezzo.
+                Tocca il campo qui sopra per vedere i piu' quotati ancora liberi,
+                oppure scrivi due lettere del nome chiamato.
               </Empty>
             </div>
           )}
