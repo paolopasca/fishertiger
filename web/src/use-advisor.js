@@ -17,15 +17,19 @@ export const useAdvisor = ({
   players,
   rules,
   overview = false,
+  shortlist = false,
 }) => {
   const [advice, setAdvice] = useState(null);
   const [squadPlan, setSquadPlan] = useState(null);
+  const [callList, setCallList] = useState(null);
   const [failure, setFailure] = useState("");
   const worker = useRef(null);
   const adviceGate = useRef(null);
   const overviewGate = useRef(null);
+  const shortlistGate = useRef(null);
   if (!adviceGate.current) adviceGate.current = createRequestGate();
   if (!overviewGate.current) overviewGate.current = createRequestGate();
+  if (!shortlistGate.current) shortlistGate.current = createRequestGate();
 
   const rulesSignature = JSON.stringify(rules);
   const boardSignature = board
@@ -80,6 +84,9 @@ export const useAdvisor = ({
         if (answer?.kind === "overview") {
           if (overviewGate.current.isCurrent(answer.requestId))
             setSquadPlan(answer);
+        } else if (answer?.kind === "shortlist") {
+          if (shortlistGate.current.isCurrent(answer.requestId))
+            setCallList(answer);
         } else if (adviceGate.current.isCurrent(answer?.requestId)) {
           setAdvice(answer);
         }
@@ -110,5 +117,17 @@ export const useAdvisor = ({
     });
   }, [overview, payload]);
 
-  return { advice, squadPlan, failure };
+  /* La lista si chiede solo a campo vuoto. Il worker e' uno solo: se girasse anche
+     mentre l'utente sta valutando un nome, il consiglio che sta aspettando finirebbe
+     in coda dietro una decina di knapsack. */
+  useEffect(() => {
+    if (!shortlist || !payload || player) return;
+    send({
+      ...payload,
+      mode: "shortlist",
+      requestId: shortlistGate.current.claim(),
+    });
+  }, [shortlist, payload, playerId]);
+
+  return { advice, squadPlan, callList, failure };
 };

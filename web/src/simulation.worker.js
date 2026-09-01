@@ -8,6 +8,7 @@ import {
 } from "./player-valuation.js";
 import { expectedDefenseModifier } from "./defense-modifier.js";
 import { auctionPriceAtOrBelow } from "./auction-state.js";
+import { activeNominationRole } from "./auction-nomination.js";
 import { positionWeight, weightedGroupValue } from "./xi-weights.js";
 const EMPTY = -1e15;
 
@@ -405,6 +406,7 @@ export const evaluateOverview = (data = {}) => {
           open: needs[role],
           owned: rules.rosterSlots[role] - needs[role],
           available: available.length,
+          leagueDemand: scarcity[role].demand,
           scarcity: Number(scarcity[role].ratio.toFixed(3)),
           estimatedSpend: planned.reduce((sum, item) => sum + item.cost, 0),
           budgetTarget: rounded(budgetPlan[role].target),
@@ -415,8 +417,13 @@ export const evaluateOverview = (data = {}) => {
     }),
   );
 
+  // Con chiamata per ruolo il reparto in fase e' l'unico su cui si puo' offrire adesso:
+  // metterlo in cima non e' cosmetica, e' l'unica riga che descrive una mossa possibile.
+  const activeRole = activeNominationRole(teams, rules);
+
   const priorities = roles.map((role, index) => {
     const plan = plans[role];
+    const callable = !activeRole || role === activeRole;
     if (!plan.open) {
       return {
         role,
@@ -424,6 +431,7 @@ export const evaluateOverview = (data = {}) => {
         reason: "Reparto completo: nessuno slot da coprire.",
         score: -1,
         index,
+        callable,
       };
     }
     const shortage = plan.available < plan.open;
@@ -435,17 +443,23 @@ export const evaluateOverview = (data = {}) => {
         : plan.scarcity >= 0.5 || fillShare >= 0.5
           ? "MEDIA"
           : "BASSA";
+    // Due fatti, non un consiglio generico: quanta offerta resta contro la domanda che
+    // la lega deve ancora coprire, e quanti crediti restano per slot. Il primo dice se
+    // si puo' aspettare, il secondo quanto si puo' spendere senza restare scoperti.
+    const perSlot = Math.floor(plan.budgetRemaining / Math.max(1, plan.open));
     const reason = shortage
-      ? `Mancano ${plan.open} giocatori ma ne restano solo ${plan.available} disponibili.`
-      : urgency === "ALTA"
-        ? `Servono ${plan.open} giocatori e la domanda del ruolo supera l'offerta.`
-        : urgency === "MEDIA"
-          ? `Servono ancora ${plan.open} giocatori: conviene monitorare i prossimi prezzi.`
-          : `Restano ${plan.open} slot, con offerta sufficiente per attendere valore.`;
-    return { role, urgency, reason, score, index };
+      ? `Solo ${plan.available} liberi per i tuoi ${plan.open} slot: il ruolo non basta piu' a completare la rosa.`
+      : `${plan.available} liberi per ${plan.leagueDemand} slot ancora aperti in lega. `
+        + `Hai ${plan.budgetRemaining} crediti su ${plan.open} posti, ${perSlot} a testa.`;
+    return { role, urgency, reason, score, index, callable };
   })
-    .sort((a, b) => b.score - a.score || a.index - b.index)
-    .map(({ role, urgency, reason }) => ({ role, urgency, reason }));
+    .sort(
+      (a, b) =>
+        Number(b.callable) - Number(a.callable) ||
+        b.score - a.score ||
+        a.index - b.index,
+    )
+    .map(({ role, urgency, reason, callable }) => ({ role, urgency, reason, callable }));
 
   return {
     kind: "overview",
@@ -459,6 +473,7 @@ export const evaluateOverview = (data = {}) => {
       spendableCredits,
       marketInflation: Number(market.inflation.toFixed(3)),
       slotsOpen,
+      activeRole,
       deterministic: true,
     },
   };
@@ -1020,10 +1035,83 @@ export const evaluateAuction = (data = {}) => {
   };
 };
 
+/* Chi si puo' chiamare adesso, in ordine di quanto conviene pagarlo.
+ *
+ * L'ordine e' per margine, cioe' tetto d'offerta meno prezzo atteso. Ordinare per solo
+ * tetto non distingue nulla: quando il budget di ruolo fa da tappo, meta' del reparto
+ * finisce sullo stesso numero (misurato: sette portieri su otto a 34 con 35 crediti
+ * destinati al ruolo). Il margine dice invece dove il budget ha spazio per vincere la
+ * contesa senza sforare il piano, che e' la domanda del momento.
+ *
+ * Il margine non e' una scommessa contro il mercato: nasce da budget residuo, slot
+ * scoperti e prezzi attesi, non da una pretesa di valutare meglio i giocatori.
+ *
+ * Si valuta un sovrainsieme dei candidati mostrati, scelto per prezzo di mercato che e'
+ * gratis, e poi si riordina per tetto. Valutare tutto il pool costerebbe secondi;
+ * sedici candidati costano una settantina di millisecondi a inizio asta e meno dopo,
+ * perche' il pool si svuota.
+ *
+ * Ogni candidato passa per lo stesso `evaluateAuction` del percorso normale, con lo
+ * stesso payload: il numero della lista e quello che compare cliccando il nome devono
+ * coincidere, altrimenti lo strumento si contraddice davanti all'utente. */
+const SHORTLIST_SHOWN = 8;
+const SHORTLIST_EVALUATED = 16;
+
+export const evaluateShortlist = (data = {}) => {
+  const rules = normalizeRules(data.rules);
+  const teams = Array.isArray(data.teams) ? data.teams : [];
+  const mineIndex = teams.indexOf(data.mine);
+  const requestedOwner = Number(data.owner);
+  const ownerIndex =
+    Number.isInteger(requestedOwner) &&
+      requestedOwner >= 0 &&
+      requestedOwner < teams.length
+      ? requestedOwner
+      : mineIndex >= 0
+        ? mineIndex
+        : 0;
+  const team = teams[ownerIndex] || data.mine || { credits: 0, roster: [] };
+  const pool = Array.isArray(data.remaining) ? data.remaining : [];
+  const needs = roleNeeds(team, rules);
+  const activeRole = activeNominationRole(teams, rules);
+
+  // Chiamabili adesso: il ruolo in fase quando la lega chiama per ruolo, altrimenti ogni
+  // ruolo con slot ancora scoperti. Un reparto gia' pieno non entra nella lista.
+  const callable = pool.filter((player) =>
+    activeRole ? player.ruolo === activeRole : needs[player.ruolo] > 0,
+  );
+
+  const items = [...callable]
+    .sort((a, b) => sourceFvm(b) - sourceFvm(a))
+    .slice(0, SHORTLIST_EVALUATED)
+    .map((player) => {
+      const advice = evaluateAuction({ ...data, player });
+      return {
+        id: player.id,
+        maxBid: advice.maxBid,
+        idealMax: advice.idealMax,
+        recommendation: advice.recommendation,
+        marketPrice: advice.summary?.estimatedMarketPrice ?? 0,
+      };
+    })
+    .map((item) => ({ ...item, headroom: item.maxBid - item.marketPrice }))
+    .sort((a, b) => b.headroom - a.headroom || b.maxBid - a.maxBid)
+    .slice(0, SHORTLIST_SHOWN);
+
+  return {
+    kind: "shortlist",
+    activeRole,
+    callableLeft: callable.length,
+    items,
+  };
+};
+
 export const evaluateRequest = (data = {}) => ({
   ...(data?.mode === "overview"
     ? evaluateOverview(data)
-    : evaluateAuction(data)),
+    : data?.mode === "shortlist"
+      ? evaluateShortlist(data)
+      : evaluateAuction(data)),
   requestId: data?.requestId ?? null,
 });
 

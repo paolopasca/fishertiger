@@ -9,7 +9,10 @@ set -euo pipefail
 cd "$(dirname "$0")"
 PORTA_API=8000
 PORTA_WEB=5173
-PROFILO="config/profiles/lega-paolo.json"
+# Il nome del file DEVE coincidere con profile_id: il server salva in
+# config/profiles/<profile_id>.json, quindi un file battezzato diversamente viene letto
+# ma mai riscritto, e ogni modifica fatta dalle Impostazioni sparisce alla ricarica.
+PROFILO="config/profiles/lega-paolo-2026-27.json"
 
 rosso()  { printf '\033[31m%s\033[0m\n' "$*"; }
 verde()  { printf '\033[32m%s\033[0m\n' "$*"; }

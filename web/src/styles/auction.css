@@ -633,3 +633,48 @@
 .residual--warn b { color: var(--c-warn); }
 .residual--stop { color: var(--c-stop); }
 .residual--stop b { color: var(--c-stop); }
+
+/* Lista di chiamata e piano per reparto ------------------------------------- */
+
+/* `.row` e' una griglia a tre colonne; la riga di chiamata ne ha sei di contenuto,
+   quindi senza un template suo le metriche andrebbero a capo. Mobile first: sul
+   telefono resta solo "mai oltre", che e' il numero che serve mentre si rilancia. */
+.call-row {
+  grid-template-columns: auto auto minmax(0, 1fr) auto;
+  width: 100%;
+  text-align: left;
+}
+
+.call-row .row-title {
+  display: flex;
+  align-items: center;
+  gap: var(--s-2);
+  overflow: visible;
+}
+
+/* Selettore piu' specifico di `.player-metric`: views.css viene importato dopo
+   auction.css, quindi a parita' di specificita' vincerebbe il suo `display: grid`. */
+.call-row .call-metric {
+  display: none;
+}
+
+/* Il reparto in fase si marca con una barra a sinistra invece che con una pill: la
+   colonna del piano e' stretta e una parola in piu' verrebbe troncata. Gli altri
+   reparti restano leggibili ma non competono per l'attenzione. */
+.row--phase {
+  box-shadow: inset 3px 0 0 var(--c-brand);
+}
+
+.row--muted {
+  opacity: 0.5;
+}
+
+@media (min-width: 700px) {
+  .call-row {
+    grid-template-columns: auto auto minmax(0, 1fr) repeat(3, auto);
+  }
+
+  .call-row .call-metric {
+    display: grid;
+  }
+}

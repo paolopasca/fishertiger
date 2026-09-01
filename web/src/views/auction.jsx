@@ -27,6 +27,8 @@ import {
   AdviceDetail,
   BidGauge,
   PriceStepper,
+  RECOMMENDATION_LABELS,
+  RECOMMENDATION_TONE,
   bidVerdict,
 } from "../auction-advice.jsx";
 import {
@@ -118,12 +120,13 @@ export default function AuctionView({
     setDraft((current) => reconcileAuctionDraft(current, data.players, board));
   }, [data.players, board.assigned, board.activeRole, board.storageReadOk, setDraft]);
 
-  const { advice, squadPlan: overview } = useAdvisor({
+  const { advice, squadPlan: overview, callList } = useAdvisor({
     player,
     board,
     players: data.players,
     rules: activeRules,
     overview: true,
+    shortlist: true,
   });
 
   const activeRole = board.activeRole;
@@ -376,12 +379,11 @@ export default function AuctionView({
               onOpenPlayer={() => openPlayer(player)}
             />
           ) : (
-            <div className="card">
-              <Empty title="Nessun giocatore in asta">
-                Tocca il campo qui sopra per vedere i piu' quotati ancora liberi,
-                oppure scrivi due lettere del nome chiamato.
-              </Empty>
-            </div>
+            <CallList
+              callList={callList}
+              players={data.players}
+              onPick={selectPlayer}
+            />
           )}
 
           <div className="log-strip">
@@ -641,6 +643,104 @@ function VerdictCard({
   );
 }
 
+/** Chi si puo' chiamare adesso, gia' con il prezzo.
+ *
+ * Sostituisce lo spazio vuoto che occupava meta' schermata chiedendo di toccare il campo
+ * di ricerca. All'asta il tempo per giocatore e' di un minuto: la domanda "chi chiamo" va
+ * risposta senza un clic in mezzo.
+ *
+ * L'ordine e' per margine, cioe' tetto meno prezzo atteso, non per prezzo: ordinare per
+ * prezzo restituisce la classifica del listone, che l'utente ha gia' altrove. */
+function CallList({ callList, players, onPick }) {
+  const byId = useMemo(
+    () => new Map((players || []).map((item) => [playerIdKey(item.id), item])),
+    [players],
+  );
+  if (!callList) {
+    return (
+      <div className="card">
+        <Empty title="Calcolo in corso">
+          Sto valutando chi conviene chiamare adesso.
+        </Empty>
+      </div>
+    );
+  }
+  const rows = (callList.items || [])
+    .map((item) => ({ item, player: byId.get(playerIdKey(item.id)) }))
+    .filter((entry) => entry.player);
+  if (!rows.length) {
+    return (
+      <div className="card">
+        <Empty title="Nessuno da chiamare">
+          Non restano giocatori chiamabili per i posti ancora scoperti.
+        </Empty>
+      </div>
+    );
+  }
+  return (
+    <section className="card call-list">
+      <div className="section-head">
+        <div>
+          <span className="kicker">Ordine di chiamata</span>
+          <h2>Chi chiamare adesso</h2>
+        </div>
+        <div className="stat" style={{ textAlign: "right" }}>
+          <span className="stat-label">
+            {callList.activeRole
+              ? ROLE_LABELS[callList.activeRole].toLowerCase()
+              : "liberi"}
+          </span>
+          <span className="stat-value">{callList.callableLeft}</span>
+        </div>
+      </div>
+      <div className="rows">
+        {rows.map(({ item, player: candidate }, index) => (
+          <button
+            type="button"
+            key={playerIdKey(candidate.id)}
+            className="row call-row"
+            onClick={() => onPick(candidate)}
+          >
+            <b className="row-rank">{String(index + 1).padStart(2, "0")}</b>
+            <RoleChip role={candidate.ruolo} />
+            <span className="row-main">
+              <span className="row-title">
+                {candidate.nome}
+                <span
+                  className={`pill${RECOMMENDATION_TONE[item.recommendation]
+                    ? ` pill--${RECOMMENDATION_TONE[item.recommendation]}`
+                    : ""}`}
+                >
+                  {RECOMMENDATION_LABELS[item.recommendation] || "Valuta"}
+                </span>
+              </span>
+              <span className="row-sub">
+                {candidate.squadra} · {formatTier(candidate.guida_asta_fascia)}
+              </span>
+            </span>
+            <span className="player-metric call-metric">
+              <b>{item.marketPrice}</b>
+              <small>mercato</small>
+            </span>
+            <span className="player-metric call-metric">
+              <b>{item.idealMax}</b>
+              <small>conviene</small>
+            </span>
+            <span className="player-metric">
+              <b>{item.maxBid}</b>
+              <small>mai oltre</small>
+            </span>
+          </button>
+        ))}
+      </div>
+      <p className="micro" style={{ marginTop: "var(--s-3)" }}>
+        In ordine di margine fra quanto puoi pagare e quanto ci si aspetta costi.
+        Tocca un nome per aprirlo, oppure scrivi sopra chi e' stato chiamato.
+      </p>
+    </section>
+  );
+}
+
 /** Where the remaining budget should go next, by department. */
 function RosePlan({ overview }) {
   return (
@@ -668,8 +768,17 @@ function RosePlan({ overview }) {
                 : priority.urgency === "COMPLETO"
                   ? "go"
                   : "";
+          const phase = overview.summary.activeRole;
           return (
-            <div className="row" key={priority.role}>
+            <div
+              className={`row${phase ? (priority.callable ? " row--phase" : " row--muted") : ""}`}
+              key={priority.role}
+              title={
+                phase && !priority.callable
+                  ? `Non chiamabile finche' dura la fase ${ROLE_LABELS[phase].toLowerCase()}.`
+                  : undefined
+              }
+            >
               <RoleChip role={priority.role} />
               <span className="row-main">
                 <span className="row-title">
