@@ -25,12 +25,35 @@ if [ "$versione_node" -lt 22 ]; then
   exit 1
 fi
 
-# --- porte gia' occupate -----------------------------------------------------
+# --- gia' acceso? ------------------------------------------------------------
+# Doppio clic sull'icona: se il tool risponde gia', riapre solo il browser invece
+# di lamentarsi della porta occupata. E' il comportamento di una qualsiasi app.
+web_su=$(curl -sf "http://localhost:$PORTA_WEB"          >/dev/null 2>&1 && echo si || echo no)
+api_su=$(curl -sf "http://127.0.0.1:$PORTA_API/api/profiles" >/dev/null 2>&1 && echo si || echo no)
+
+if [ "$web_su" = si ] && [ "$api_su" = si ]; then
+  verde "gia' acceso:  http://localhost:$PORTA_WEB"
+  grigio "  la finestra che lo tiene su e' un altro Terminale: chiudi quella per spegnerlo"
+  command -v open >/dev/null && open "http://localhost:$PORTA_WEB" 2>/dev/null || true
+  exit 0
+fi
+
+# Meta' acceso: e' lo stato che inganna, perche' l'interfaccia si apre e sembra viva
+# mentre l'API sotto e' morta. Meglio fermarsi e dire come ripulire.
+if [ "$web_su" = si ] || [ "$api_su" = si ]; then
+  rosso "c'e' un avvio rimasto a meta' (interfaccia: $web_su, API: $api_su)"
+  grigio "  per ripulire:  kill \$(lsof -ti tcp:$PORTA_WEB -sTCP:LISTEN; lsof -ti tcp:$PORTA_API -sTCP:LISTEN)"
+  exit 1
+fi
+
+# --- porte occupate da altro -------------------------------------------------
+# `-sTCP:LISTEN` non e' un dettaglio: senza, lsof conta anche i client, e il browser
+# con la scheda del tool ancora aperta verrebbe scambiato per un server occupante.
 for porta in "$PORTA_API" "$PORTA_WEB"; do
-  if lsof -ti tcp:"$porta" >/dev/null 2>&1; then
-    rosso "la porta $porta e' gia' occupata"
-    grigio "  chi la usa:  lsof -ti tcp:$porta"
-    grigio "  per liberarla:  kill \$(lsof -ti tcp:$porta)"
+  if lsof -ti tcp:"$porta" -sTCP:LISTEN >/dev/null 2>&1; then
+    rosso "la porta $porta e' occupata da un altro programma"
+    grigio "  chi la usa:  lsof -i tcp:$porta -sTCP:LISTEN"
+    grigio "  per liberarla:  kill \$(lsof -ti tcp:$porta -sTCP:LISTEN)"
     exit 1
   fi
 done
@@ -61,11 +84,20 @@ fi
 
 # --- avvio -------------------------------------------------------------------
 mkdir -p .log
+# npm avvia vite come processo figlio: uccidendo solo il processo diretto, vite
+# resterebbe attaccato alla porta 5173 e il lancio successivo troverebbe
+# l'interfaccia viva su un'API morta. Quindi si scende lungo l'albero, foglie prima.
+uccidi_albero() {
+  local pid=$1 figlio
+  for figlio in $(pgrep -P "$pid" 2>/dev/null); do uccidi_albero "$figlio"; done
+  kill -TERM "$pid" 2>/dev/null || true
+}
+
 spegni() {
   echo
   grigio "spengo..."
-  [ -n "${PID_API:-}" ] && kill "$PID_API" 2>/dev/null || true
-  [ -n "${PID_WEB:-}" ] && kill "$PID_WEB" 2>/dev/null || true
+  [ -n "${PID_API:-}" ] && uccidi_albero "$PID_API"
+  [ -n "${PID_WEB:-}" ] && uccidi_albero "$PID_WEB"
   wait 2>/dev/null || true
 }
 trap spegni EXIT INT TERM
