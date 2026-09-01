@@ -6,10 +6,35 @@ import pytest
 from advisor.league_profile import LeagueProfile, NOMINATION_POLICIES, SourceDeclaration, TIE_BREAKERS
 
 
-PROFILE_PATH = Path(__file__).parents[1] / "config" / "default_profile.json"
+# Il profilo di default e' quello della nostra lega: l'app lo carica all'avvio e
+# lasciare l'esempio avrebbe significato leggere numeri di un'altra lega (8 squadre,
+# 750 crediti) senza accorgersene. L'esempio della repo resta accanto, e i test che
+# proteggono lo schema continuano a girare su quello, senza indebolirsi.
+PROFILE_PATH = Path(__file__).parents[1] / "config" / "default_profile.esempio.json"
+LEAGUE_PROFILE_PATH = Path(__file__).parents[1] / "config" / "default_profile.json"
 
 
-def test_default_profile_loads_and_matches_current_league_rules():
+def test_default_profile_is_our_league():
+    """Il profilo caricato all'avvio deve essere la lega vera, non l'esempio."""
+    profile = LeagueProfile.load_json(LEAGUE_PROFILE_PATH)
+
+    assert len(profile.participants.team_names) == 10
+    assert profile.credits.starting == 500
+    assert profile.virtual_goals.threshold == 66
+    assert profile.virtual_goals.step == 6
+    assert profile.auction.nomination_policy == "call_by_role"
+    assert profile.auction.minimum_bid == 1
+    assert profile.defense_modifier.enabled is True
+    assert [(tier.minimum_average, tier.bonus) for tier in profile.defense_modifier.tiers] == [
+        (6.0, 1), (6.5, 3), (7.0, 6)
+    ]
+    assert (profile.roster_slots.P, profile.roster_slots.D,
+            profile.roster_slots.C, profile.roster_slots.A) == (3, 8, 8, 6)
+    percentages = profile.auction.role_budget_percentages
+    assert percentages.P + percentages.D + percentages.C + percentages.A == 100
+
+
+def test_example_profile_loads_and_matches_current_league_rules():
     profile = LeagueProfile.load_json(PROFILE_PATH)
 
     assert profile.profile_id == "example-2026-27"
