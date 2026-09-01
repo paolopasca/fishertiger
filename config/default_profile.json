@@ -1,20 +1,208 @@
 {
-  "auction": {"bid_increment": 1, "minimum_bid": 1, "nomination_policy": "call_by_role", "reserve_credits_per_open_slot": 1, "role_budget_flexibility_percent": 5, "role_budget_percentages": {"A": 39, "C": 35, "D": 19, "P": 7}},
-  "bench_switch": {"bench_roles": ["P", "P", "D", "D", "D", "C", "C", "C", "A", "A", "A"], "max_substitutions": 3, "mode": "Basic"},
-  "credits": {"entry_fee_eur": 100, "starting": 500},
-  "current_sources": [{"format": "xlsx", "name": "player_list", "path": "data/raw/listone_2026_27.xlsx", "required": true}, {"format": "xlsx", "name": "serie_a_calendar", "path": "data/raw/calendario_2026_27.xlsx", "required": true}, {"format": "csv", "name": "teams", "path": "data/raw/squadre.csv", "required": true}, {"format": "csv", "name": "starters", "path": "data/raw/titolari.csv", "required": true}, {"format": "csv", "name": "set_pieces", "path": "data/raw/piazzati.csv", "required": true}, {"format": "csv", "name": "auction_guide", "path": "data/raw/guide_asta_sosfanta.csv", "required": true}, {"format": "xlsx", "name": "league_calendar", "path": "data/raw/calendario_lega.xlsx", "required": false}],
-  "defense_modifier": {"enabled": true, "required_defenders": 4, "table_name": "LEAGUE", "tiers": [{"bonus": 1, "minimum_average": 6.0}, {"bonus": 3, "minimum_average": 6.5}, {"bonus": 6, "minimum_average": 7.0}]},
-  "formations": {"allowed": ["3-4-3", "3-5-2", "4-3-3", "4-4-2", "4-5-1", "5-3-2", "5-4-1"]},
-  "history_sources": [{"format": "xlsx", "name": "stats_2025_26", "path": "data/raw/statistiche_2025_26.xlsx", "required": true, "season": "2025-26"}, {"format": "xlsx", "name": "stats_2024_25", "path": "data/raw/statistiche_2024_25.xlsx", "required": true, "season": "2024-25"}, {"format": "xlsx", "name": "stats_2023_24", "path": "data/raw/statistiche_2023_24.xlsx", "required": true, "season": "2023-24"}],
-  "incomplete_lineup": {"policy": "zero_score", "score": 0},
-  "name": "Lega Paolo 2026/27",
-  "participants": {"team_names": ["Paolo", "Squadra 2", "Squadra 3", "Squadra 4", "Squadra 5", "Squadra 6", "Squadra 7", "Squadra 8", "Squadra 9", "Squadra 10"], "user_team": "Paolo"},
-  "payouts": {"prizes": [{"amount_eur": 300, "rank": 1}, {"amount_eur": 220, "rank": 2}, {"amount_eur": 100, "rank": 3}], "unplaced_policy": "no_payout"},
-  "profile_id": "lega-paolo-2026-27",
-  "roster_slots": {"A": 6, "C": 8, "D": 8, "P": 3},
-  "schema_version": 1,
-  "scoring": {"assist": 1, "goal": 3, "goalkeeper_conceded_goal": -1, "own_goal": -2, "red_card": -1, "yellow_card": -0.5},
-  "season": {"fantasy_end_matchday": 36, "fantasy_matchdays": 36, "fantasy_start_matchday": 1, "season": "2026/27", "serie_a_matchdays": 38},
-  "standings": {"draw_points": 1, "exact_tie_policy": "shared_rank", "loss_points": 0, "tie_breakers": ["goal_difference", "head_to_head", "season_fantasy_score"], "win_points": 3},
-  "virtual_goals": {"step": 6, "threshold": 66}
+  "auction": {
+    "bid_increment": 1, 
+    "minimum_bid": 1, 
+    "nomination_policy": "call_by_role", 
+    "reserve_credits_per_open_slot": 1, 
+    "role_budget_flexibility_percent": 5, 
+    "role_budget_percentages": {
+      "A": 39, 
+      "C": 35, 
+      "D": 19, 
+      "P": 7
+    }
+  }, 
+  "bench_switch": {
+    "bench_roles": [
+      "P", 
+      "P", 
+      "D", 
+      "D", 
+      "D", 
+      "C", 
+      "C", 
+      "C", 
+      "A", 
+      "A", 
+      "A"
+    ], 
+    "max_substitutions": 3, 
+    "mode": "Basic"
+  }, 
+  "credits": {
+    "entry_fee_eur": 100, 
+    "starting": 500
+  }, 
+  "current_sources": [
+    {
+      "format": "xlsx", 
+      "name": "player_list", 
+      "path": "data/raw/listone_2026_27.xlsx", 
+      "required": true
+    }, 
+    {
+      "format": "xlsx", 
+      "name": "serie_a_calendar", 
+      "path": "data/raw/calendario_2026_27.xlsx", 
+      "required": true
+    }, 
+    {
+      "format": "csv", 
+      "name": "teams", 
+      "path": "data/raw/squadre.csv", 
+      "required": true
+    }, 
+    {
+      "format": "csv", 
+      "name": "starters", 
+      "path": "data/raw/titolari.csv", 
+      "required": true
+    }, 
+    {
+      "format": "csv", 
+      "name": "set_pieces", 
+      "path": "data/raw/piazzati.csv", 
+      "required": true
+    }, 
+    {
+      "format": "csv", 
+      "name": "auction_guide", 
+      "path": "data/raw/guide_asta_sosfanta.csv", 
+      "required": true
+    }, 
+    {
+      "format": "xlsx", 
+      "name": "league_calendar", 
+      "path": "data/raw/calendario_lega.xlsx", 
+      "required": false
+    }
+  ], 
+  "defense_modifier": {
+    "enabled": true, 
+    "required_defenders": 4, 
+    "table_name": "LEAGUE", 
+    "tiers": [
+      {
+        "bonus": 1, 
+        "minimum_average": 6.0
+      }, 
+      {
+        "bonus": 3, 
+        "minimum_average": 6.5
+      }, 
+      {
+        "bonus": 6, 
+        "minimum_average": 7.0
+      }
+    ]
+  }, 
+  "formations": {
+    "allowed": [
+      "3-4-3", 
+      "3-5-2", 
+      "4-3-3", 
+      "4-4-2", 
+      "4-5-1", 
+      "5-3-2", 
+      "5-4-1"
+    ]
+  }, 
+  "history_sources": [
+    {
+      "format": "xlsx", 
+      "name": "stats_2025_26", 
+      "path": "data/raw/statistiche_2025_26.xlsx", 
+      "required": true, 
+      "season": "2025-26"
+    }, 
+    {
+      "format": "xlsx", 
+      "name": "stats_2024_25", 
+      "path": "data/raw/statistiche_2024_25.xlsx", 
+      "required": true, 
+      "season": "2024-25"
+    }, 
+    {
+      "format": "xlsx", 
+      "name": "stats_2023_24", 
+      "path": "data/raw/statistiche_2023_24.xlsx", 
+      "required": true, 
+      "season": "2023-24"
+    }
+  ], 
+  "incomplete_lineup": {
+    "policy": "zero_score", 
+    "score": 0
+  }, 
+  "name": "Lega a 10 · 500 crediti", 
+  "participants": {
+    "team_names": [
+      "La mia squadra", 
+      "Squadra 2", 
+      "Squadra 3", 
+      "Squadra 4", 
+      "Squadra 5", 
+      "Squadra 6", 
+      "Squadra 7", 
+      "Squadra 8", 
+      "Squadra 9", 
+      "Squadra 10"
+    ], 
+    "user_team": "La mia squadra"
+  }, 
+  "payouts": {
+    "prizes": [
+      {
+        "amount_eur": 300, 
+        "rank": 1
+      }, 
+      {
+        "amount_eur": 220, 
+        "rank": 2
+      }, 
+      {
+        "amount_eur": 100, 
+        "rank": 3
+      }
+    ], 
+    "unplaced_policy": "no_payout"
+  }, 
+  "profile_id": "lega-paolo-2026-27", 
+  "roster_slots": {
+    "A": 6, 
+    "C": 8, 
+    "D": 8, 
+    "P": 3
+  }, 
+  "schema_version": 1, 
+  "scoring": {
+    "assist": 1, 
+    "goal": 3, 
+    "goalkeeper_conceded_goal": -1, 
+    "own_goal": -2, 
+    "red_card": -1, 
+    "yellow_card": -0.5
+  }, 
+  "season": {
+    "fantasy_end_matchday": 36, 
+    "fantasy_matchdays": 36, 
+    "fantasy_start_matchday": 1, 
+    "season": "2026/27", 
+    "serie_a_matchdays": 38
+  }, 
+  "standings": {
+    "draw_points": 1, 
+    "exact_tie_policy": "shared_rank", 
+    "loss_points": 0, 
+    "tie_breakers": [
+      "goal_difference", 
+      "head_to_head", 
+      "season_fantasy_score"
+    ], 
+    "win_points": 3
+  }, 
+  "virtual_goals": {
+    "step": 6, 
+    "threshold": 66
+  }
 }
